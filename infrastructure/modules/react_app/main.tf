@@ -60,6 +60,4 @@ resource "aws_codebuild_project" "react_app_build" {
   # ... (add your CodeBuild config here)
 }
 
-output "cloudfront_url" {
-  value = aws_cloudfront_distribution.react_app.domain_name
-}
+
