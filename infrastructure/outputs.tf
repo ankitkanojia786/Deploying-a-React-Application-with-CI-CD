@@ -1,14 +1,14 @@
 output "app_url" {
-  description = "Application URL via CloudFront"
+  description = "CloudFront URL for the application"
   value       = module.react_app.cloudfront_url
 }
 
-output "bucket_name" {
-  description = "S3 bucket name hosting the app"
+output "s3_bucket" {
+  description = "Name of the S3 bucket hosting the app"
   value       = module.react_app.s3_bucket_name
 }
 
-output "pipeline_name" {
-  description = "CodePipeline name"
+output "pipeline" {
+  description = "Name of the CodePipeline"
   value       = module.react_app.codepipeline_name
 }
