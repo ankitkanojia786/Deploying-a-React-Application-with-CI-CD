@@ -1,16 +1,10 @@
 # infrastructure/main.tf
 terraform {
   required_version = ">= 1.5.0"
-  backend "s3" {
-    bucket = "my-react-app-tfstate"
-    key    = "terraform.tfstate"
-    region = "ap-south-1"
-  }
 }
 
-provider "aws" {
-  region = "ap-south-1"
-}
+# Keep your existing provider.tf and backend.tf AS IS
+# Keep your existing outputs.tf AS IS
 
 module "react_app" {
   source = "./modules/react_app"
@@ -21,8 +15,4 @@ module "react_app" {
   github_branch           = "main"
   s3_bucket_name          = "my-react-app-b38bc729"
   cloudfront_distribution_id = "E2G08P571G5PON"
-}
-
-output "app_url" {
-  value = module.react_app.cloudfront_url
 }
