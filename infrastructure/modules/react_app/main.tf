@@ -1,11 +1,41 @@
 # modules/react_app/main.tf
-variable "s3_bucket_name" {}
-variable "cloudfront_distribution_id" {}
-variable "region" {}
-variable "app_name" {}
-variable "github_repo" {}
-variable "github_branch" {}
-variable "codestar_connection_arn" {}
+variable "s3_bucket_name" {
+  description = "Name of the S3 bucket"
+  type        = string
+}
+
+variable "cloudfront_distribution_id" {
+  description = "Existing CloudFront distribution ID"
+  type        = string
+}
+
+variable "region" {
+  description = "AWS region"
+  type        = string
+  default     = "ap-south-1"
+}
+
+variable "app_name" {
+  description = "Application name"
+  type        = string
+  default     = "my-react-app"
+}
+
+variable "github_repo" {
+  description = "GitHub repository in owner/repo format"
+  type        = string
+}
+
+variable "github_branch" {
+  description = "GitHub branch name"
+  type        = string
+  default     = "main"
+}
+
+variable "codestar_connection_arn" {
+  description = "CodeStar connection ARN"
+  type        = string
+}
 
 # S3 Bucket Data Source
 data "aws_s3_bucket" "react_app" {
@@ -17,11 +47,11 @@ resource "aws_cloudfront_origin_access_identity" "oai" {
   comment = "OAI for ${var.app_name}"
 }
 
-# CloudFront Distribution (Fixed)
+# CloudFront Distribution
 resource "aws_cloudfront_distribution" "s3_distribution" {
   origin {
     domain_name = data.aws_s3_bucket.react_app.bucket_regional_domain_name
-    origin_id   = "S3Origin-${var.app_name}"
+    origin_id   = "S3-${var.app_name}"
 
     s3_origin_config {
       origin_access_identity = aws_cloudfront_origin_access_identity.oai.cloudfront_access_identity_path
@@ -31,12 +61,11 @@ resource "aws_cloudfront_distribution" "s3_distribution" {
   enabled             = true
   is_ipv6_enabled     = true
   default_root_object = "index.html"
-  comment             = "${var.app_name} distribution"
 
   default_cache_behavior {
     allowed_methods  = ["GET", "HEAD", "OPTIONS"]
     cached_methods   = ["GET", "HEAD"]
-    target_origin_id = "S3Origin-${var.app_name}"
+    target_origin_id = "S3-${var.app_name}"
 
     forwarded_values {
       query_string = false
@@ -80,7 +109,7 @@ resource "aws_iam_role" "codebuild_role" {
   })
 }
 
-# CodeBuild Project (Fixed)
+# CodeBuild Project
 resource "aws_codebuild_project" "react_app_build" {
   name          = "${var.app_name}-build"
   description   = "Build for ${var.app_name}"
@@ -88,9 +117,10 @@ resource "aws_codebuild_project" "react_app_build" {
   build_timeout = 10
 
   source {
-    type      = "GITHUB"
-    location  = "https://github.com/${var.github_repo}.git"
-    buildspec = "buildspec.yml"
+    type            = "GITHUB"
+    location        = "https://github.com/${var.github_repo}.git"
+    git_clone_depth = 1
+    buildspec       = "buildspec.yml"
   }
 
   environment {
@@ -114,7 +144,7 @@ resource "aws_codebuild_project" "react_app_build" {
   }
 }
 
-# Outputs (Fixed)
+# Outputs
 output "cloudfront_url" {
   value = aws_cloudfront_distribution.s3_distribution.domain_name
 }
