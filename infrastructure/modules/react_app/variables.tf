@@ -1,3 +1,11 @@
+variable "s3_bucket_name" {}
+variable "cloudfront_distribution_id" {}
+variable "region" {}
+variable "app_name" {}
+variable "github_repo" {}
+variable "github_branch" {}
+variable "codestar_connection_arn" {}
+
 variable "app_name" {
   type        = string
   description = "Name prefix for all resources"
