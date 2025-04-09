@@ -1,10 +1,28 @@
 # modules/react_app/main.tf
-variable "s3_bucket_name" {}
-variable "cloudfront_distribution_id" {}
-variable "region" {}
-variable "app_name" {}
-variable "github_repo" {}
-variable "github_branch" {}
+variable "s3_bucket_name" {
+  default = "my-react-app-b38bc729" # Your existing bucket
+}
+
+variable "cloudfront_distribution_id" {
+  default = "E2G08P571G5PON" # Your existing CloudFront ID
+}
+
+variable "region" {
+  default = "ap-south-1" # Mumbai region
+}
+
+variable "app_name" {
+  default = "my-react-app" # Fixed app name
+}
+
+variable "github_repo" {
+  default = "ankitkanojia786/Deploying-a-React-Application-with-CI-CD"
+}
+
+variable "github_branch" {
+  default = "main"
+}
+
 variable "codestar_connection_arn" {}
 
 # S3 Bucket Data Source
@@ -14,16 +32,54 @@ data "aws_s3_bucket" "react_app" {
 
 # CloudFront Distribution
 resource "aws_cloudfront_distribution" "s3_distribution" {
-  # ... (keep your existing CloudFront config) ...
+  origin {
+    domain_name = data.aws_s3_bucket.react_app.bucket_regional_domain_name
+    origin_id   = "S3-my-react-app"
+
+    s3_origin_config {
+      origin_access_identity = aws_cloudfront_origin_access_identity.oai.cloudfront_access_identity_path
+    }
+  }
+
+  enabled             = true
+  default_root_object = "index.html"
+
+  default_cache_behavior {
+    allowed_methods  = ["GET", "HEAD", "OPTIONS"]
+    cached_methods   = ["GET", "HEAD"]
+    target_origin_id = "S3-my-react-app"
+
+    forwarded_values {
+      query_string = false
+      cookies {
+        forward = "none"
+      }
+    }
+
+    viewer_protocol_policy = "redirect-to-https"
+    min_ttl                = 0
+    default_ttl            = 3600
+    max_ttl                = 86400
+  }
+
+  restrictions {
+    geo_restriction {
+      restriction_type = "none"
+    }
+  }
+
+  viewer_certificate {
+    cloudfront_default_certificate = true
+  }
 }
 
 # CodePipeline Resources
-resource "aws_s3_bucket" "codepipeline_bucket" {
-  bucket = "${var.app_name}-pipeline-artifacts"
+resource "aws_s3_bucket" "codepipeline_artifacts" {
+  bucket = "my-react-app-pipeline-artifacts"
 }
 
 resource "aws_iam_role" "codepipeline_role" {
-  name = "${var.app_name}-pipeline-role"
+  name = "my-react-app-pipeline-role"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17",
@@ -38,11 +94,11 @@ resource "aws_iam_role" "codepipeline_role" {
 }
 
 resource "aws_codepipeline" "react_pipeline" {
-  name     = "${var.app_name}-pipeline"
+  name     = "my-react-app-pipeline"
   role_arn = aws_iam_role.codepipeline_role.arn
 
   artifact_store {
-    location = aws_s3_bucket.codepipeline_bucket.bucket
+    location = aws_s3_bucket.codepipeline_artifacts.bucket
     type     = "S3"
   }
 
@@ -76,7 +132,7 @@ resource "aws_codepipeline" "react_pipeline" {
       version          = "1"
 
       configuration = {
-        ProjectName = aws_codebuild_project.react_app_build.name
+        ProjectName = "my-react-app-build"
       }
     }
   }
@@ -84,7 +140,7 @@ resource "aws_codepipeline" "react_pipeline" {
 
 # Outputs
 output "cloudfront_url" {
-  value = aws_cloudfront_distribution.s3_distribution.domain_name
+  value = "https://${aws_cloudfront_distribution.s3_distribution.domain_name}"
 }
 
 output "s3_bucket_name" {
