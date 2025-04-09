@@ -1,15 +1,30 @@
 version: 0.2
 
+env:
+  variables:
+    BUILD_DIR: "build"
+    S3_DEST_PATH: "/"  # Deploy to root of bucket
+
 phases:
   install:
     runtime-versions:
       nodejs: 18
     commands:
+      - echo "Installing dependencies..."
       - npm ci
+
   build:
     commands:
+      - echo "Building application..."
       - npm run build
+      - ls -la $BUILD_DIR  # Verify build output
+
   post_build:
     commands:
-      - aws s3 sync build/ s3://$S3_BUCKET/ --delete --acl public-read
-      - aws cloudfront create-invalidation --distribution-id $CLOUDFRONT_DIST_ID --paths "/*" --no-paginate
+      - echo "Deploying to S3..."
+      - aws s3 sync $BUILD_DIR/ s3://$S3_BUCKET$S3_DEST_PATH --delete --no-progress
+
+      - echo "Creating CloudFront invalidation..."
+      - aws cloudfront create-invalidation --distribution-id $CLOUDFRONT_DIST_ID --paths "/*"
+
+      - echo "Deployment complete!"
