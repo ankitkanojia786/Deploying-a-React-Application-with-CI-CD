@@ -1,4 +1,4 @@
-# S3 Bucket
+# S3 Bucket Configuration
 resource "aws_s3_bucket" "react_app" {
   bucket = var.s3_bucket_name
   force_destroy = true
@@ -10,7 +10,7 @@ resource "aws_s3_bucket_website_configuration" "react_app" {
   error_document { key = "index.html" }
 }
 
-# CloudFront
+# CloudFront Distribution
 resource "aws_cloudfront_origin_access_identity" "oai" {
   comment = "OAI for ${var.app_name}"
 }
@@ -47,7 +47,7 @@ resource "aws_cloudfront_distribution" "s3_distribution" {
   }
 }
 
-# CodeBuild
+# CodeBuild Project
 resource "aws_iam_role" "codebuild_role" {
   name = "${var.app_name}-codebuild-role"
   assume_role_policy = jsonencode({
@@ -81,7 +81,7 @@ resource "aws_codebuild_project" "react_app_build" {
   artifacts { type = "NO_ARTIFACTS" }
 }
 
-# CodePipeline 
+# CodePipeline
 resource "aws_codepipeline" "react_pipeline" {
   name     = "${var.app_name}-pipeline"
   role_arn = aws_iam_role.codepipeline_role.arn
@@ -118,15 +118,18 @@ resource "aws_codepipeline" "react_pipeline" {
   }
 }
 
-# Outputs
+# Outputs (ONLY DEFINED HERE - NO outputs.tf FILE)
 output "cloudfront_url" {
-  value = aws_cloudfront_distribution.s3_distribution.domain_name
+  description = "CloudFront Distribution URL"
+  value       = aws_cloudfront_distribution.s3_distribution.domain_name
 }
 
 output "s3_bucket_name" {
-  value = aws_s3_bucket.react_app.bucket
+  description = "S3 Bucket Name"
+  value       = aws_s3_bucket.react_app.bucket
 }
 
 output "codepipeline_name" {
-  value = aws_codepipeline.react_pipeline.name
+  description = "CodePipeline Name"
+  value       = aws_codepipeline.react_pipeline.name
 }
