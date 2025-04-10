@@ -10,6 +10,23 @@ resource "aws_s3_bucket_website_configuration" "react_app" {
   error_document { key = "index.html" }
 }
 
+resource "aws_s3_bucket_policy" "react_app" {
+  bucket = aws_s3_bucket.react_app.id
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect = "Allow",
+        Principal = {
+          AWS = aws_cloudfront_origin_access_identity.oai.iam_arn
+        },
+        Action = "s3:GetObject",
+        Resource = "${aws_s3_bucket.react_app.arn}/*"
+      }
+    ]
+  })
+}
+
 # CloudFront
 resource "aws_cloudfront_origin_access_identity" "oai" {
   comment = "OAI for ${var.app_name}"
@@ -25,6 +42,7 @@ resource "aws_cloudfront_distribution" "s3_distribution" {
   }
 
   enabled             = true
+  is_ipv6_enabled     = true
   default_root_object = "index.html"
   
   default_cache_behavior {
@@ -38,6 +56,18 @@ resource "aws_cloudfront_distribution" "s3_distribution" {
     }
   }
 
+  custom_error_response {
+    error_code         = 404
+    response_code      = 200
+    response_page_path = "/index.html"
+  }
+
+  custom_error_response {
+    error_code         = 403
+    response_code      = 200
+    response_page_path = "/index.html"
+  }
+
   restrictions {
     geo_restriction { restriction_type = "none" }
   }
@@ -47,7 +77,7 @@ resource "aws_cloudfront_distribution" "s3_distribution" {
   }
 }
 
-# CodeBuild
+# IAM Roles and Policies
 resource "aws_iam_role" "codebuild_role" {
   name = "${var.app_name}-codebuild-role"
 
@@ -61,13 +91,55 @@ resource "aws_iam_role" "codebuild_role" {
   })
 }
 
+resource "aws_iam_role_policy" "codebuild_policy" {
+  name = "${var.app_name}-codebuild-policy"
+  role = aws_iam_role.codebuild_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect = "Allow",
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ],
+        Resource = ["*"]
+      },
+      {
+        Effect = "Allow",
+        Action = [
+          "s3:GetObject",
+          "s3:GetObjectVersion",
+          "s3:PutObject",
+          "s3:ListBucket"
+        ],
+        Resource = [
+          aws_s3_bucket.react_app.arn,
+          "${aws_s3_bucket.react_app.arn}/*",
+          aws_s3_bucket.pipeline_artifacts.arn,
+          "${aws_s3_bucket.pipeline_artifacts.arn}/*"
+        ]
+      },
+      {
+        Effect = "Allow",
+        Action = [
+          "cloudfront:CreateInvalidation"
+        ],
+        Resource = ["*"]
+      }
+    ]
+  })
+}
+
+# CodeBuild
 resource "aws_codebuild_project" "react_app_build" {
   name          = "${var.app_name}-build"
   service_role  = aws_iam_role.codebuild_role.arn
   source {
-    type      = "GITHUB"
-    location  = "https://github.com/${var.github_repo}.git"
-    buildspec = "buildspec.yml"
+    type      = "CODEPIPELINE"
+    buildspec = file("${path.module}/buildspec.yml")
   }
   environment {
     compute_type    = "BUILD_GENERAL1_SMALL"
@@ -78,13 +150,17 @@ resource "aws_codebuild_project" "react_app_build" {
       name  = "S3_BUCKET"
       value = var.s3_bucket_name
     }
+    environment_variable {
+      name  = "CLOUDFRONT_DISTRIBUTION_ID"
+      value = aws_cloudfront_distribution.s3_distribution.id
+    }
   }
-  artifacts { type = "NO_ARTIFACTS" }
+  artifacts { type = "CODEPIPELINE" }
 }
 
-# CodePipeline - IMPORTANT FIXES HERE
+# CodePipeline
 resource "aws_s3_bucket" "pipeline_artifacts" {
-  bucket = "${var.app_name}-pipeline-artifacts-${data.aws_caller_identity.current.account_id}" # Unique name
+  bucket = "${var.app_name}-pipeline-artifacts-${data.aws_caller_identity.current.account_id}"
   force_destroy = true
 }
 
@@ -100,6 +176,48 @@ resource "aws_iam_role" "codepipeline_role" {
       Effect = "Allow",
       Principal = { Service = "codepipeline.amazonaws.com" }
     }]
+  })
+}
+
+resource "aws_iam_role_policy" "codepipeline_policy" {
+  name = "${var.app_name}-codepipeline-policy"
+  role = aws_iam_role.codepipeline_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect = "Allow",
+        Action = [
+          "s3:GetObject",
+          "s3:GetObjectVersion",
+          "s3:GetBucketVersioning",
+          "s3:PutObjectAcl",
+          "s3:PutObject"
+        ],
+        Resource = [
+          aws_s3_bucket.pipeline_artifacts.arn,
+          "${aws_s3_bucket.pipeline_artifacts.arn}/*",
+          aws_s3_bucket.react_app.arn,
+          "${aws_s3_bucket.react_app.arn}/*"
+        ]
+      },
+      {
+        Effect = "Allow",
+        Action = [
+          "codebuild:BatchGetBuilds",
+          "codebuild:StartBuild"
+        ],
+        Resource = ["*"]
+      },
+      {
+        Effect = "Allow",
+        Action = [
+          "codestar-connections:UseConnection"
+        ],
+        Resource = var.codestar_connection_arn
+      }
+    ]
   })
 }
 
@@ -162,9 +280,57 @@ resource "aws_codepipeline" "react_pipeline" {
   }
 }
 
+# Failure Notifications
+resource "aws_sns_topic" "pipeline_failures" {
+  name = "${var.app_name}-pipeline-failures"
+}
+
+resource "aws_sns_topic_subscription" "email_subscription" {
+  topic_arn = aws_sns_topic.pipeline_failures.arn
+  protocol  = "email"
+  endpoint  = var.notification_email
+}
+
+resource "aws_cloudwatch_event_rule" "pipeline_failed" {
+  name        = "${var.app_name}-pipeline-failed"
+  description = "Triggers when pipeline execution fails"
+
+  event_pattern = jsonencode({
+    source = ["aws.codepipeline"],
+    detail-type = ["CodePipeline Pipeline Execution State Change"],
+    detail = {
+      state = ["FAILED"],
+      pipeline = [aws_codepipeline.react_pipeline.name]
+    }
+  })
+}
+
+resource "aws_cloudwatch_event_target" "sns_target" {
+  rule      = aws_cloudwatch_event_rule.pipeline_failed.name
+  target_id = "SendToSNS"
+  arn       = aws_sns_topic.pipeline_failures.arn
+}
+
+resource "aws_sns_topic_policy" "default" {
+  arn    = aws_sns_topic.pipeline_failures.arn
+  policy = data.aws_iam_policy_document.sns_topic_policy.json
+}
+
+data "aws_iam_policy_document" "sns_topic_policy" {
+  statement {
+    effect  = "Allow"
+    actions = ["SNS:Publish"]
+    principals {
+      type        = "Service"
+      identifiers = ["events.amazonaws.com"]
+    }
+    resources = [aws_sns_topic.pipeline_failures.arn]
+  }
+}
+
 # Outputs
 output "cloudfront_url" {
-  value = aws_cloudfront_distribution.s3_distribution.domain_name
+  value = "https://${aws_cloudfront_distribution.s3_distribution.domain_name}"
 }
 
 output "s3_bucket_name" {
