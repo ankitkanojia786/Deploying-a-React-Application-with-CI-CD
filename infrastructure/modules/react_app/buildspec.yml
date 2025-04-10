@@ -3,7 +3,8 @@ version: 0.2
 env:
   variables:
     BUILD_DIR: "build"
-    S3_DEST_PATH: "/"  # Deploy to root of bucket
+    S3_DEST_PATH: "/"
+    TF_FAILURE_TOPIC: "arn:aws:sns:${AWS_REGION}:${AWS_ACCOUNT_ID}:${APP_NAME}-terraform-failures"
 
 phases:
   install:
@@ -12,19 +13,68 @@ phases:
     commands:
       - echo "Installing dependencies..."
       - npm ci
+      
+      # Install Terraform
+      - echo "Installing Terraform..."
+      - wget https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip
+      - unzip terraform_${TERRAFORM_VERSION}_linux_amd64.zip
+      - mv terraform /usr/local/bin/
+      - terraform version
+
+  pre_build:
+    commands:
+      - echo "Preparing build environment..."
+      - export APP_NAME="${APP_NAME}"
+      - export TF_VAR_s3_bucket_name="${S3_BUCKET}"
+      - export TF_VAR_cloudfront_distribution_id="${CLOUDFRONT_DIST_ID}"
 
   build:
     commands:
       - echo "Building application..."
       - npm run build
-      - ls -la $BUILD_DIR  # Verify build output
+      - ls -la $BUILD_DIR
+
+      # Terraform Plan
+      - echo "Running Terraform plan..."
+      - |
+        if ! terraform init && terraform plan -out=tfplan; then
+          aws sns publish \
+            --topic-arn "$TF_FAILURE_TOPIC" \
+            --subject "Terraform Plan Failed: ${CODEBUILD_BUILD_ID}" \
+            --message "Error in ${CODEBUILD_BUILD_ID}\nPhase: build\nLogs: ${CODEBUILD_LOG_PATH}"
+          exit 1
+        fi
 
   post_build:
     commands:
       - echo "Deploying to S3..."
-      - aws s3 sync $BUILD_DIR/ s3://$S3_BUCKET$S3_DEST_PATH --delete --no-progress
+      - aws s3 sync $BUILD_DIR/ s3://$S3_BUCKET$S3_DEST_PATH --delete --no-progress || \
+        aws sns publish \
+          --topic-arn "$TF_FAILURE_TOPIC" \
+          --subject "S3 Sync Failed: ${CODEBUILD_BUILD_ID}" \
+          --message "Error syncing to ${S3_BUCKET}"
+
+      # Terraform Apply
+      - echo "Applying Terraform changes..."
+      - |
+        if ! terraform apply -auto-approve tfplan; then
+          aws sns publish \
+            --topic-arn "$TF_FAILURE_TOPIC" \
+            --subject "Terraform Apply Failed: ${CODEBUILD_BUILD_ID}" \
+            --message "Error in ${CODEBUILD_BUILD_ID}\nPhase: post_build\nLogs: ${CODEBUILD_LOG_PATH}"
+          exit 1
+        fi
 
       - echo "Creating CloudFront invalidation..."
-      - aws cloudfront create-invalidation --distribution-id $CLOUDFRONT_DIST_ID --paths "/*"
+      - aws cloudfront create-invalidation --distribution-id $CLOUDFRONT_DIST_ID --paths "/*" || \
+        aws sns publish \
+          --topic-arn "$TF_FAILURE_TOPIC" \
+          --subject "CloudFront Invalidation Failed: ${CODEBUILD_BUILD_ID}" \
+          --message "Error invalidating ${CLOUDFRONT_DIST_ID}"
 
       - echo "Deployment complete!"
+
+artifacts:
+  files:
+    - '**/*'
+  base-directory: "$BUILD_DIR"
