@@ -59,3 +59,9 @@ variable "cloudfront_distribution_id" {
   type        = string
   default     = "" # Empty string means create new by default
 }
+
+variable "cloudfront_distribution_id" {
+  description = "Existing CloudFront distribution ID"
+  type        = string
+  default     = "" # Empty string means create new by default
+}
