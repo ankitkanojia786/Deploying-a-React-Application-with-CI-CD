@@ -1,7 +1,13 @@
-# S3 Bucket for React App (unchanged)
+# S3 Bucket for React App
 resource "aws_s3_bucket" "react_app" {
   bucket = var.s3_bucket_name
+  acl    = "private"
   force_destroy = true
+
+  tags = {
+    Environment = var.environment
+    Project     = var.app_name
+  }
 }
 
 resource "aws_s3_bucket_website_configuration" "react_app" {
@@ -27,7 +33,7 @@ resource "aws_s3_bucket_policy" "react_app" {
   })
 }
 
-# CloudFront (unchanged)
+# CloudFront Distribution
 resource "aws_cloudfront_origin_access_identity" "oai" {
   comment = "OAI for ${var.app_name}"
 }
@@ -75,9 +81,19 @@ resource "aws_cloudfront_distribution" "s3_distribution" {
   viewer_certificate {
     cloudfront_default_certificate = true
   }
+
+  tags = {
+    Environment = var.environment
+    Project     = var.app_name
+  }
+
+  lifecycle {
+    create_before_destroy = true
+    ignore_changes = [viewer_certificate]
+  }
 }
 
-# IAM Roles and Policies (updated with SNS permissions)
+# IAM Roles and Policies
 resource "aws_iam_role" "codebuild_role" {
   name = "${var.app_name}-codebuild-role"
 
@@ -89,6 +105,11 @@ resource "aws_iam_role" "codebuild_role" {
       Principal = { Service = "codebuild.amazonaws.com" }
     }]
   })
+
+  tags = {
+    Environment = var.environment
+    Project     = var.app_name
+  }
 }
 
 resource "aws_iam_role_policy" "codebuild_policy" {
@@ -125,44 +146,39 @@ resource "aws_iam_role_policy" "codebuild_policy" {
       {
         Effect = "Allow",
         Action = [
-          "cloudfront:CreateInvalidation"
-        ],
-        Resource = ["*"]
-      },
-      # New SNS publish permission
-      {
-        Effect = "Allow",
-        Action = [
+          "cloudfront:CreateInvalidation",
           "sns:Publish"
         ],
-        Resource = [aws_sns_topic.terraform_failures.arn]
+        Resource = ["*"]
       }
     ]
   })
 }
 
-# CodeBuild (updated with alert environment variables)
+# CodeBuild Project
 resource "aws_codebuild_project" "react_app_build" {
   name          = "${var.app_name}-build"
   service_role  = aws_iam_role.codebuild_role.arn
+  
   source {
     type      = "CODEPIPELINE"
     buildspec = file("${path.module}/buildspec.yml")
   }
+  
   environment {
-    compute_type    = "BUILD_GENERAL1_SMALL"
-    image           = "aws/codebuild/standard:6.0"
+    compute_type    = var.build_compute_type
+    image           = var.build_image
     type            = "LINUX_CONTAINER"
     privileged_mode = true
+    
     environment_variable {
       name  = "S3_BUCKET"
       value = var.s3_bucket_name
     }
     environment_variable {
-      name  = "CLOUDFRONT_DISTRIBUTION_ID"
+      name  = "CLOUDFRONT_DIST_ID"
       value = aws_cloudfront_distribution.s3_distribution.id
     }
-    # New alert-related variables
     environment_variable {
       name  = "TERRAFORM_FAILURE_TOPIC_ARN"
       value = aws_sns_topic.terraform_failures.arn
@@ -172,13 +188,27 @@ resource "aws_codebuild_project" "react_app_build" {
       value = var.app_name
     }
   }
-  artifacts { type = "CODEPIPELINE" }
+  
+  artifacts {
+    type = "CODEPIPELINE"
+  }
+
+  tags = {
+    Environment = var.environment
+    Project     = var.app_name
+  }
 }
 
-# CodePipeline (unchanged)
+# CodePipeline
 resource "aws_s3_bucket" "pipeline_artifacts" {
   bucket = "${var.app_name}-pipeline-artifacts-${data.aws_caller_identity.current.account_id}"
+  acl    = "private"
   force_destroy = true
+
+  tags = {
+    Environment = var.environment
+    Project     = var.app_name
+  }
 }
 
 data "aws_caller_identity" "current" {}
@@ -194,6 +224,11 @@ resource "aws_iam_role" "codepipeline_role" {
       Principal = { Service = "codepipeline.amazonaws.com" }
     }]
   })
+
+  tags = {
+    Environment = var.environment
+    Project     = var.app_name
+  }
 }
 
 resource "aws_iam_role_policy" "codepipeline_policy" {
@@ -295,11 +330,20 @@ resource "aws_codepipeline" "react_pipeline" {
       }
     }
   }
+
+  tags = {
+    Environment = var.environment
+    Project     = var.app_name
+  }
 }
 
-# Failure Notification System (new)
+# Alerting System
 resource "aws_sns_topic" "terraform_failures" {
   name = "${var.app_name}-terraform-failures"
+  tags = {
+    Environment = var.environment
+    Project     = var.app_name
+  }
 }
 
 resource "aws_sns_topic_subscription" "email_sub" {
@@ -308,8 +352,8 @@ resource "aws_sns_topic_subscription" "email_sub" {
   endpoint  = var.notification_email
 }
 
-resource "aws_sns_topic_policy" "terraform_failures_policy" {
-  arn = aws_sns_topic.terraform_failures.arn
+resource "aws_sns_topic_policy" "default" {
+  arn    = aws_sns_topic.terraform_failures.arn
   policy = data.aws_iam_policy_document.sns_topic_policy.json
 }
 
@@ -319,21 +363,34 @@ data "aws_iam_policy_document" "sns_topic_policy" {
     actions = ["SNS:Publish"]
     principals {
       type        = "Service"
-      identifiers = ["codebuild.amazonaws.com"]
+      identifiers = ["codebuild.amazonaws.com", "events.amazonaws.com"]
     }
     resources = [aws_sns_topic.terraform_failures.arn]
   }
 }
 
-# Outputs (unchanged)
+# Outputs
 output "cloudfront_url" {
-  value = "https://${aws_cloudfront_distribution.s3_distribution.domain_name}"
+  description = "The CloudFront distribution URL"
+  value       = "https://${aws_cloudfront_distribution.s3_distribution.domain_name}"
 }
 
 output "s3_bucket_name" {
-  value = aws_s3_bucket.react_app.bucket
+  description = "The name of the S3 bucket"
+  value       = aws_s3_bucket.react_app.bucket
 }
 
 output "codepipeline_name" {
-  value = aws_codepipeline.react_pipeline.name
+  description = "The name of the CodePipeline"
+  value       = aws_codepipeline.react_pipeline.name
+}
+
+output "sns_topic_arn" {
+  description = "ARN of the failure notification topic"
+  value       = aws_sns_topic.terraform_failures.arn
+}
+
+output "codebuild_project_name" {
+  description = "Name of the CodeBuild project"
+  value       = aws_codebuild_project.react_app_build.name
 }
