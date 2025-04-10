@@ -133,3 +133,63 @@ output "codepipeline_name" {
   description = "CodePipeline Name"
   value       = aws_codepipeline.react_pipeline.name
 }
+
+# Add these resources ABOVE the codepipeline definition
+
+# Pipeline Artifacts Bucket
+resource "aws_s3_bucket" "pipeline_artifacts" {
+  bucket = "${var.app_name}-pipeline-artifacts"
+  force_destroy = true
+}
+
+# Pipeline IAM Role
+resource "aws_iam_role" "codepipeline_role" {
+  name = "${var.app_name}-pipeline-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [{
+      Action = "sts:AssumeRole",
+      Effect = "Allow",
+      Principal = {
+        Service = "codepipeline.amazonaws.com"
+      }
+    }]
+  })
+}
+
+# Pipeline IAM Policy
+resource "aws_iam_role_policy" "codepipeline_policy" {
+  name = "${var.app_name}-pipeline-policy"
+  role = aws_iam_role.codepipeline_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Action = [
+          "s3:GetObject",
+          "s3:GetObjectVersion",
+          "s3:PutObject"
+        ],
+        Effect   = "Allow",
+        Resource = "${aws_s3_bucket.pipeline_artifacts.arn}/*"
+      },
+      {
+        Action = [
+          "codestar-connections:UseConnection"
+        ],
+        Effect   = "Allow",
+        Resource = var.codestar_connection_arn
+      },
+      {
+        Action = [
+          "codebuild:BatchGetBuilds",
+          "codebuild:StartBuild"
+        ],
+        Effect   = "Allow",
+        Resource = aws_codebuild_project.react_app_build.arn
+      }
+    ]
+  })
+}
