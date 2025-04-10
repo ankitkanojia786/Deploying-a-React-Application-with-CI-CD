@@ -53,3 +53,9 @@ variable "build_image" {
   type        = string
   default     = "aws/codebuild/standard:6.0"
 }
+
+variable "cloudfront_distribution_id" {
+  description = "Existing CloudFront distribution ID"
+  type        = string
+  default     = "" # Empty string means create new by default
+}
