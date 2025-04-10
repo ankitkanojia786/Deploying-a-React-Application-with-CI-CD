@@ -1,4 +1,4 @@
-# S3 Bucket for React App
+# S3 Bucket for React App (unchanged)
 resource "aws_s3_bucket" "react_app" {
   bucket = var.s3_bucket_name
   force_destroy = true
@@ -27,7 +27,7 @@ resource "aws_s3_bucket_policy" "react_app" {
   })
 }
 
-# CloudFront
+# CloudFront (unchanged)
 resource "aws_cloudfront_origin_access_identity" "oai" {
   comment = "OAI for ${var.app_name}"
 }
@@ -77,7 +77,7 @@ resource "aws_cloudfront_distribution" "s3_distribution" {
   }
 }
 
-# IAM Roles and Policies
+# IAM Roles and Policies (updated with SNS permissions)
 resource "aws_iam_role" "codebuild_role" {
   name = "${var.app_name}-codebuild-role"
 
@@ -128,12 +128,20 @@ resource "aws_iam_role_policy" "codebuild_policy" {
           "cloudfront:CreateInvalidation"
         ],
         Resource = ["*"]
+      },
+      # New SNS publish permission
+      {
+        Effect = "Allow",
+        Action = [
+          "sns:Publish"
+        ],
+        Resource = [aws_sns_topic.terraform_failures.arn]
       }
     ]
   })
 }
 
-# CodeBuild
+# CodeBuild (updated with alert environment variables)
 resource "aws_codebuild_project" "react_app_build" {
   name          = "${var.app_name}-build"
   service_role  = aws_iam_role.codebuild_role.arn
@@ -154,11 +162,20 @@ resource "aws_codebuild_project" "react_app_build" {
       name  = "CLOUDFRONT_DISTRIBUTION_ID"
       value = aws_cloudfront_distribution.s3_distribution.id
     }
+    # New alert-related variables
+    environment_variable {
+      name  = "TERRAFORM_FAILURE_TOPIC_ARN"
+      value = aws_sns_topic.terraform_failures.arn
+    }
+    environment_variable {
+      name  = "APP_NAME"
+      value = var.app_name
+    }
   }
   artifacts { type = "CODEPIPELINE" }
 }
 
-# CodePipeline
+# CodePipeline (unchanged)
 resource "aws_s3_bucket" "pipeline_artifacts" {
   bucket = "${var.app_name}-pipeline-artifacts-${data.aws_caller_identity.current.account_id}"
   force_destroy = true
@@ -280,39 +297,19 @@ resource "aws_codepipeline" "react_pipeline" {
   }
 }
 
-# Failure Notifications
-resource "aws_sns_topic" "pipeline_failures" {
-  name = "${var.app_name}-pipeline-failures"
+# Failure Notification System (new)
+resource "aws_sns_topic" "terraform_failures" {
+  name = "${var.app_name}-terraform-failures"
 }
 
-resource "aws_sns_topic_subscription" "email_subscription" {
-  topic_arn = aws_sns_topic.pipeline_failures.arn
+resource "aws_sns_topic_subscription" "email_sub" {
+  topic_arn = aws_sns_topic.terraform_failures.arn
   protocol  = "email"
   endpoint  = var.notification_email
 }
 
-resource "aws_cloudwatch_event_rule" "pipeline_failed" {
-  name        = "${var.app_name}-pipeline-failed"
-  description = "Triggers when pipeline execution fails"
-
-  event_pattern = jsonencode({
-    source = ["aws.codepipeline"],
-    detail-type = ["CodePipeline Pipeline Execution State Change"],
-    detail = {
-      state = ["FAILED"],
-      pipeline = [aws_codepipeline.react_pipeline.name]
-    }
-  })
-}
-
-resource "aws_cloudwatch_event_target" "sns_target" {
-  rule      = aws_cloudwatch_event_rule.pipeline_failed.name
-  target_id = "SendToSNS"
-  arn       = aws_sns_topic.pipeline_failures.arn
-}
-
-resource "aws_sns_topic_policy" "default" {
-  arn    = aws_sns_topic.pipeline_failures.arn
+resource "aws_sns_topic_policy" "terraform_failures_policy" {
+  arn = aws_sns_topic.terraform_failures.arn
   policy = data.aws_iam_policy_document.sns_topic_policy.json
 }
 
@@ -322,13 +319,13 @@ data "aws_iam_policy_document" "sns_topic_policy" {
     actions = ["SNS:Publish"]
     principals {
       type        = "Service"
-      identifiers = ["events.amazonaws.com"]
+      identifiers = ["codebuild.amazonaws.com"]
     }
-    resources = [aws_sns_topic.pipeline_failures.arn]
+    resources = [aws_sns_topic.terraform_failures.arn]
   }
 }
 
-# Outputs
+# Outputs (unchanged)
 output "cloudfront_url" {
   value = "https://${aws_cloudfront_distribution.s3_distribution.domain_name}"
 }
@@ -339,31 +336,4 @@ output "s3_bucket_name" {
 
 output "codepipeline_name" {
   value = aws_codepipeline.react_pipeline.name
-}
-
-# SNS Topic for failures
-resource "aws_sns_topic" "terraform_failures" {
-  name = "${var.app_name}-terraform-failures"
-}
-
-# Email subscription
-resource "aws_sns_topic_subscription" "email_sub" {
-  topic_arn = aws_sns_topic.terraform_failures.arn
-  protocol  = "email"
-  endpoint  = var.notification_email
-}
-
-# IAM Policy to allow CodeBuild to publish to SNS
-resource "aws_iam_role_policy" "codebuild_sns" {
-  name = "${var.app_name}-codebuild-sns"
-  role = aws_iam_role.codebuild_role.id
-
-  policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [{
-      Effect   = "Allow",
-      Action   = "sns:Publish",
-      Resource = aws_sns_topic.terraform_failures.arn
-    }]
-  })
 }
