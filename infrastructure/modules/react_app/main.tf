@@ -1,6 +1,4 @@
-# Input Variables (no declarations needed if you have variables.tf)
-
-# S3 Bucket Configuration
+# S3 Bucket for React App
 resource "aws_s3_bucket" "react_app" {
   bucket = var.s3_bucket_name
   force_destroy = true
@@ -12,7 +10,7 @@ resource "aws_s3_bucket_website_configuration" "react_app" {
   error_document { key = "index.html" }
 }
 
-# CloudFront Configuration
+# CloudFront
 resource "aws_cloudfront_origin_access_identity" "oai" {
   comment = "OAI for ${var.app_name}"
 }
@@ -27,9 +25,8 @@ resource "aws_cloudfront_distribution" "s3_distribution" {
   }
 
   enabled             = true
-  is_ipv6_enabled     = true
   default_root_object = "index.html"
-
+  
   default_cache_behavior {
     allowed_methods  = ["GET", "HEAD", "OPTIONS"]
     cached_methods   = ["GET", "HEAD"]
@@ -50,7 +47,7 @@ resource "aws_cloudfront_distribution" "s3_distribution" {
   }
 }
 
-# CodeBuild Configuration
+# CodeBuild
 resource "aws_iam_role" "codebuild_role" {
   name = "${var.app_name}-codebuild-role"
 
@@ -66,38 +63,32 @@ resource "aws_iam_role" "codebuild_role" {
 
 resource "aws_codebuild_project" "react_app_build" {
   name          = "${var.app_name}-build"
-  description   = "React App Build"
   service_role  = aws_iam_role.codebuild_role.arn
-  build_timeout = 10
-
   source {
     type      = "GITHUB"
     location  = "https://github.com/${var.github_repo}.git"
     buildspec = "buildspec.yml"
   }
-
   environment {
     compute_type    = "BUILD_GENERAL1_SMALL"
     image           = "aws/codebuild/standard:6.0"
     type            = "LINUX_CONTAINER"
     privileged_mode = true
-
     environment_variable {
       name  = "S3_BUCKET"
       value = var.s3_bucket_name
     }
   }
-
-  artifacts {
-    type = "NO_ARTIFACTS"
-  }
+  artifacts { type = "NO_ARTIFACTS" }
 }
 
-# CodePipeline Configuration
+# CodePipeline - IMPORTANT FIXES HERE
 resource "aws_s3_bucket" "pipeline_artifacts" {
-  bucket = "${var.app_name}-pipeline-artifacts"
+  bucket = "${var.app_name}-pipeline-artifacts-${data.aws_caller_identity.current.account_id}" # Unique name
   force_destroy = true
 }
+
+data "aws_caller_identity" "current" {}
 
 resource "aws_iam_role" "codepipeline_role" {
   name = "${var.app_name}-pipeline-role"
