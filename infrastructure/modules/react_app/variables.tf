@@ -33,7 +33,7 @@ variable "notification_email" {
 variable "region" {
   description = "AWS region where resources will be deployed"
   type        = string
-  default     = "ap-south-1" # Explicitly set to your region
+  default     = "ap-south-1"
 }
 
 variable "environment" {
@@ -55,13 +55,7 @@ variable "build_image" {
 }
 
 variable "cloudfront_distribution_id" {
-  description = "Existing CloudFront distribution ID"
+  description = "Existing CloudFront distribution ID (leave empty to create new)"
   type        = string
-  default     = "" # Empty string means create new by default
-}
-
-variable "cloudfront_distribution_id" {
-  description = "Existing CloudFront distribution ID"
-  type        = string
-  default     = "" # Empty string means create new by default
+  default     = ""
 }
