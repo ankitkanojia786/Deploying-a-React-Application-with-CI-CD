@@ -340,3 +340,30 @@ output "s3_bucket_name" {
 output "codepipeline_name" {
   value = aws_codepipeline.react_pipeline.name
 }
+
+# SNS Topic for failures
+resource "aws_sns_topic" "terraform_failures" {
+  name = "${var.app_name}-terraform-failures"
+}
+
+# Email subscription
+resource "aws_sns_topic_subscription" "email_sub" {
+  topic_arn = aws_sns_topic.terraform_failures.arn
+  protocol  = "email"
+  endpoint  = var.notification_email
+}
+
+# IAM Policy to allow CodeBuild to publish to SNS
+resource "aws_iam_role_policy" "codebuild_sns" {
+  name = "${var.app_name}-codebuild-sns"
+  role = aws_iam_role.codebuild_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [{
+      Effect   = "Allow",
+      Action   = "sns:Publish",
+      Resource = aws_sns_topic.terraform_failures.arn
+    }]
+  })
+}
