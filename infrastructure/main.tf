@@ -16,6 +16,6 @@ module "react_app" {
   codestar_connection_arn = "arn:aws:codestar-connections:ap-south-1:860265990835:connection/b9b175eb-c417-44dc-8e1b-332d71300d5a"
   
   # New variables for email alerts
-  notification_email      = "ankitkanojia58@gmail.com.com" # << Replace with your email
+  notification_email      = "ankitkanojia58@gmail.com" # << Replace with your email
   region                  = "ap-south-1"            # << Match your current region
 }
