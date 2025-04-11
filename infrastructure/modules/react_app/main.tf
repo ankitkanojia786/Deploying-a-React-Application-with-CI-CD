@@ -1,12 +1,18 @@
-# S3 Bucket for React App
+# S3 Bucket for React App (updated for AWS S3 ACL changes)
 resource "aws_s3_bucket" "react_app" {
   bucket = var.s3_bucket_name
-  acl    = "private"
   force_destroy = true
 
   tags = {
     Environment = var.environment
     Project     = var.app_name
+  }
+}
+
+resource "aws_s3_bucket_ownership_controls" "react_app" {
+  bucket = aws_s3_bucket.react_app.id
+  rule {
+    object_ownership = "BucketOwnerEnforced"
   }
 }
 
@@ -85,11 +91,6 @@ resource "aws_cloudfront_distribution" "s3_distribution" {
   tags = {
     Environment = var.environment
     Project     = var.app_name
-  }
-
-  lifecycle {
-    create_before_destroy = true
-    ignore_changes = [viewer_certificate]
   }
 }
 
@@ -199,10 +200,9 @@ resource "aws_codebuild_project" "react_app_build" {
   }
 }
 
-# CodePipeline
+# Pipeline Artifacts Bucket (updated for ACL changes)
 resource "aws_s3_bucket" "pipeline_artifacts" {
   bucket = "${var.app_name}-pipeline-artifacts-${data.aws_caller_identity.current.account_id}"
-  acl    = "private"
   force_destroy = true
 
   tags = {
@@ -211,8 +211,16 @@ resource "aws_s3_bucket" "pipeline_artifacts" {
   }
 }
 
+resource "aws_s3_bucket_ownership_controls" "pipeline_artifacts" {
+  bucket = aws_s3_bucket.pipeline_artifacts.id
+  rule {
+    object_ownership = "BucketOwnerEnforced"
+  }
+}
+
 data "aws_caller_identity" "current" {}
 
+# CodePipeline Resources
 resource "aws_iam_role" "codepipeline_role" {
   name = "${var.app_name}-pipeline-role"
 
@@ -244,7 +252,6 @@ resource "aws_iam_role_policy" "codepipeline_policy" {
           "s3:GetObject",
           "s3:GetObjectVersion",
           "s3:GetBucketVersioning",
-          "s3:PutObjectAcl",
           "s3:PutObject"
         ],
         Resource = [
