@@ -1,110 +1,44 @@
 version: 0.2
 
-env:
-  variables:
-    # Hardcoded for your account (replace with vars if needed)
-    AWS_ACCOUNT_ID: "860265990835"
-    AWS_REGION: "ap-south-1"
-    SNS_TOPIC_ARN: "arn:aws:sns:ap-south-1:860265990835:my-react-app-terraform-failures"
-    CLOUDFRONT_URL: "https://d1bh10607ak6rt.cloudfront.net"
-    
-    # Dynamic values
-    BUILD_DIR: "build"
-    BUILD_TIMESTAMP: $(date +%Y-%m-%dT%H:%M:%S%z)
-    BUILD_URL: "https://ap-south-1.console.aws.amazon.com/codesuite/codebuild/${AWS_ACCOUNT_ID}/projects/${APP_NAME}-build/build/${APP_NAME}-build%3A${CODEBUILD_BUILD_ID}/"
-
 phases:
   install:
     runtime-versions:
-      nodejs: 18
+      nodejs: 16
+      python: 3.11
     commands:
-      # -------------------------------------------------------------------
-      # 1. IMMEDIATE VERIFICATION (Tests SNS connectivity at start)
-      # -------------------------------------------------------------------
-      - |
-        echo "=== Testing notification system ==="
-        aws sns publish \
-          --topic-arn "$SNS_TOPIC_ARN" \
-          --subject "[INIT] Build started - ${APP_NAME}" \
-          --message "Build ${CODEBUILD_BUILD_ID} initialized at ${BUILD_TIMESTAMP}" \
-          --region "$AWS_REGION" \
-          || { echo "ERROR: Failed initial SNS test"; exit 1; }
-
-      # -------------------------------------------------------------------
-      # 2. ENVIRONMENT VALIDATION
-      # -------------------------------------------------------------------
-      - |
-        echo "=== Validating environment ==="
-        echo "APP_NAME: ${APP_NAME}"
-        echo "S3_BUCKET: ${S3_BUCKET}"
-        echo "CLOUDFRONT_DIST_ID: ${CLOUDFRONT_DIST_ID}"
-        echo "TERRAFORM_FAILURE_TOPIC_ARN: ${TERRAFORM_FAILURE_TOPIC_ARN}"
-
-  pre_build:
-    commands:
-      - echo "=== Build details ==="
-      - echo "Build logs: ${BUILD_URL}"
-      - echo "Source version: ${CODEBUILD_SOURCE_VERSION}"
+      - echo Installing Terraform...
+      - curl -o terraform.zip https://releases.hashicorp.com/terraform/1.6.6/terraform_1.6.6_linux_amd64.zip
+      - unzip terraform.zip
+      - mv terraform /usr/local/bin/
+      - terraform version
 
   build:
     commands:
-      # -------------------------------------------------------------------
-      # 3. BUILD WITH COMPREHENSIVE ERROR HANDLING
-      # -------------------------------------------------------------------
+      - echo Running Terraform Init...
+      - terraform init
+
+      - echo Running Terraform Plan...
       - |
-        echo "=== Building application ==="
-        set -euo pipefail  # Exit on any error
-        
-        # Capture build output with timestamp logging
-        npm run build 2>&1 | tee build.log || {
-          BUILD_STATUS=$?
-          ERROR_MSG=$(tail -n 20 build.log | sed 's/"/\\"/g')
-          
-          # FAILURE NOTIFICATION (with detailed context)
+        terraform plan -out=tfplan || {
+          echo "Terraform Plan failed. Sending alert...";
           aws sns publish \
-            --topic-arn "$SNS_TOPIC_ARN" \
-            --subject "[FAILURE] ${APP_NAME} build failed" \
-            --message "{
-              \"Project\": \"${APP_NAME}\",
-              \"Environment\": \"production\",
-              \"BuildId\": \"${CODEBUILD_BUILD_ID}\",
-              \"Timestamp\": \"${BUILD_TIMESTAMP}\",
-              \"Status\": \"failed\",
-              \"ErrorCode\": ${BUILD_STATUS},
-              \"LogUrl\": \"${BUILD_URL}\",
-              \"LastErrors\": \"${ERROR_MSG}\"
-            }" \
-            --region "$AWS_REGION" \
-            || echo "WARNING: Failed to send failure notification"
-          
-          exit $BUILD_STATUS
+            --topic-arn arn:aws:sns:ap-south-1:860265990835:my-react-app-terraform-failures \
+            --subject "Terraform Plan Failed in CodeBuild" \
+            --message "Terraform plan failed for my-react-app in CodeBuild. Please check the logs.";
+          exit 1;
         }
 
-  post_build:
-    commands:
-      # -------------------------------------------------------------------
-      # 4. SUCCESS NOTIFICATION
-      # -------------------------------------------------------------------
+      - echo Running Terraform Apply...
       - |
-        echo "=== Sending success notification ==="
-        aws sns publish \
-          --topic-arn "$SNS_TOPIC_ARN" \
-          --subject "[SUCCESS] ${APP_NAME} deployed" \
-          --message "{
-            \"Project\": \"${APP_NAME}\",
-            \"Environment\": \"production\",
-            \"BuildId\": \"${CODEBUILD_BUILD_ID}\",
-            \"Timestamp\": \"${BUILD_TIMESTAMP}\",
-            \"Status\": \"success\",
-            \"Url\": \"${CLOUDFRONT_URL}\",
-            \"LogUrl\": \"${BUILD_URL}\"
-          }" \
-          --region "$AWS_REGION" \
-          || echo "WARNING: Failed to send success notification"
-
-        echo "✅ Successfully deployed to: ${CLOUDFRONT_URL}"
+        terraform apply -auto-approve tfplan || {
+          echo "Terraform Apply failed. Sending alert...";
+          aws sns publish \
+            --topic-arn arn:aws:sns:ap-south-1:860265990835:my-react-app-terraform-failures \
+            --subject "Terraform Apply Failed in CodeBuild" \
+            --message "Terraform apply failed for my-react-app in CodeBuild. Please check the logs.";
+          exit 1;
+        }
 
 artifacts:
   files:
     - '**/*'
-  base-directory: "$BUILD_DIR"
