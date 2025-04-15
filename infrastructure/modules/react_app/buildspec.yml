@@ -2,16 +2,16 @@ version: 0.2
 
 env:
   variables:
-    # Hardcoded for your account (replace with variables later)
+    # Hardcoded for your account (replace with vars if needed)
     AWS_ACCOUNT_ID: "860265990835"
     AWS_REGION: "ap-south-1"
-    TF_FAILURE_TOPIC: "arn:aws:sns:ap-south-1:860265990835:my-react-app-terraform-failures"
+    SNS_TOPIC_ARN: "arn:aws:sns:ap-south-1:860265990835:my-react-app-terraform-failures"
     CLOUDFRONT_URL: "https://d1bh10607ak6rt.cloudfront.net"
     
     # Dynamic values
     BUILD_DIR: "build"
     BUILD_TIMESTAMP: $(date +%Y-%m-%dT%H:%M:%S%z)
-    BUILD_URL: "https://ap-south-1.console.aws.amazon.com/codesuite/codebuild/860265990835/projects/${APP_NAME}-build/build/${APP_NAME}-build%3A${CODEBUILD_BUILD_ID}/?region=ap-south-1"
+    BUILD_URL: "https://ap-south-1.console.aws.amazon.com/codesuite/codebuild/${AWS_ACCOUNT_ID}/projects/${APP_NAME}-build/build/${APP_NAME}-build%3A${CODEBUILD_BUILD_ID}/"
 
 phases:
   install:
@@ -19,87 +19,90 @@ phases:
       nodejs: 18
     commands:
       # -------------------------------------------------------------------
-      # TEST: Immediate SNS notification to verify pipeline can send emails
+      # 1. IMMEDIATE VERIFICATION (Tests SNS connectivity at start)
       # -------------------------------------------------------------------
       - |
-        echo "Sending initial test notification..."
+        echo "=== Testing notification system ==="
         aws sns publish \
-          --topic-arn "$TF_FAILURE_TOPIC" \
-          --subject "[PIPELINE TEST] Email System Check - ${APP_NAME}" \
-          --message "This test confirms the pipeline can send emails.
-          
-          APP: ${APP_NAME}
-          TIMESTAMP: ${BUILD_TIMESTAMP}
-          BUILD ID: ${CODEBUILD_BUILD_ID}
-          
-          If received, SNS is correctly configured!" \
+          --topic-arn "$SNS_TOPIC_ARN" \
+          --subject "[INIT] Build started - ${APP_NAME}" \
+          --message "Build ${CODEBUILD_BUILD_ID} initialized at ${BUILD_TIMESTAMP}" \
           --region "$AWS_REGION" \
-          || echo "WARNING: Failed to send test notification"
+          || { echo "ERROR: Failed initial SNS test"; exit 1; }
 
-      # Install dependencies
-      - npm ci
-      - terraform --version
+      # -------------------------------------------------------------------
+      # 2. ENVIRONMENT VALIDATION
+      # -------------------------------------------------------------------
+      - |
+        echo "=== Validating environment ==="
+        echo "APP_NAME: ${APP_NAME}"
+        echo "S3_BUCKET: ${S3_BUCKET}"
+        echo "CLOUDFRONT_DIST_ID: ${CLOUDFRONT_DIST_ID}"
+        echo "TERRAFORM_FAILURE_TOPIC_ARN: ${TERRAFORM_FAILURE_TOPIC_ARN}"
 
   pre_build:
     commands:
+      - echo "=== Build details ==="
       - echo "Build logs: ${BUILD_URL}"
+      - echo "Source version: ${CODEBUILD_SOURCE_VERSION}"
 
   build:
     commands:
       # -------------------------------------------------------------------
-      # FAILURE SIMULATION (Uncomment to test alerts)
-      # -------------------------------------------------------------------
-      # - echo "SIMULATING FAILURE FOR TESTING" && exit 1
-
-      # -------------------------------------------------------------------
-      # ACTUAL BUILD WITH ERROR HANDLING
+      # 3. BUILD WITH COMPREHENSIVE ERROR HANDLING
       # -------------------------------------------------------------------
       - |
-        echo "Starting React build..."
-        set -euo pipefail  # Exit immediately on any error
+        echo "=== Building application ==="
+        set -euo pipefail  # Exit on any error
         
+        # Capture build output with timestamp logging
         npm run build 2>&1 | tee build.log || {
-          # Capture last 15 lines of errors (sanitized for JSON)
-          ERROR_DETAILS=$(tail -n 15 build.log | jq -R -s -c '.')
+          BUILD_STATUS=$?
+          ERROR_MSG=$(tail -n 20 build.log | sed 's/"/\\"/g')
           
-          # Send failure alert
+          # FAILURE NOTIFICATION (with detailed context)
           aws sns publish \
-            --topic-arn "$TF_FAILURE_TOPIC" \
-            --subject "[FAILURE] ${APP_NAME} Build Failed" \
+            --topic-arn "$SNS_TOPIC_ARN" \
+            --subject "[FAILURE] ${APP_NAME} build failed" \
             --message "{
               \"Project\": \"${APP_NAME}\",
               \"Environment\": \"production\",
               \"BuildId\": \"${CODEBUILD_BUILD_ID}\",
               \"Timestamp\": \"${BUILD_TIMESTAMP}\",
-              \"Error\": \"React build failed\",
+              \"Status\": \"failed\",
+              \"ErrorCode\": ${BUILD_STATUS},
               \"LogUrl\": \"${BUILD_URL}\",
-              \"Details\": ${ERROR_DETAILS}
+              \"LastErrors\": \"${ERROR_MSG}\"
             }" \
             --region "$AWS_REGION" \
-            || echo "ERROR: Failed to send SNS notification"
+            || echo "WARNING: Failed to send failure notification"
           
-          exit 1
+          exit $BUILD_STATUS
         }
 
   post_build:
     commands:
       # -------------------------------------------------------------------
-      # SUCCESS NOTIFICATION
+      # 4. SUCCESS NOTIFICATION
       # -------------------------------------------------------------------
       - |
+        echo "=== Sending success notification ==="
         aws sns publish \
-          --topic-arn "$TF_FAILURE_TOPIC" \
-          --subject "[SUCCESS] ${APP_NAME} Deployed" \
-          --message "Deployment succeeded!
-          
-          APP: ${APP_NAME}
-          URL: ${CLOUDFRONT_URL}
-          TIMESTAMP: ${BUILD_TIMESTAMP}
-          BUILD LOGS: ${BUILD_URL}" \
+          --topic-arn "$SNS_TOPIC_ARN" \
+          --subject "[SUCCESS] ${APP_NAME} deployed" \
+          --message "{
+            \"Project\": \"${APP_NAME}\",
+            \"Environment\": \"production\",
+            \"BuildId\": \"${CODEBUILD_BUILD_ID}\",
+            \"Timestamp\": \"${BUILD_TIMESTAMP}\",
+            \"Status\": \"success\",
+            \"Url\": \"${CLOUDFRONT_URL}\",
+            \"LogUrl\": \"${BUILD_URL}\"
+          }" \
           --region "$AWS_REGION" \
           || echo "WARNING: Failed to send success notification"
 
-        echo "✅ Deployed to ${CLOUDFRONT_URL}"
+        echo "✅ Successfully deployed to: ${CLOUDFRONT_URL}"
 
 artifacts:
   files:
