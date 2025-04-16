@@ -15,29 +15,47 @@ phases:
   build:
     commands:
       - echo Running Terraform Init...
-      - terraform init
+      - terraform init | tee /tmp/terraform.log
 
       - echo Running Terraform Plan...
       - |
-        terraform plan -out=tfplan || {
-          echo "Terraform Plan failed. Sending alert...";
+        terraform plan -out=tfplan | tee -a /tmp/terraform.log || {
+          echo "Terraform Plan failed. Sending alert..."
+          TIMESTAMP=$(date +%s)
+          LOG_FILE="failure-plan-${TIMESTAMP}.txt"
+          echo "Terraform plan failed at $(date)" >> /tmp/terraform.log
+          aws s3 cp /tmp/terraform.log s3://my-react-app-logs/${LOG_FILE}
           aws sns publish \
             --topic-arn arn:aws:sns:ap-south-1:860265990835:my-react-app-terraform-failures \
             --subject "Terraform Plan Failed in CodeBuild" \
-            --message "Terraform plan failed for my-react-app in CodeBuild. Please check the logs.";
-          exit 1;
+            --message "Terraform plan failed for my-react-app. Logs: https://s3.console.aws.amazon.com/s3/object/my-react-app-logs/${LOG_FILE}?region=ap-south-1"
+          exit 1
         }
 
       - echo Running Terraform Apply...
       - |
-        terraform apply -auto-approve tfplan || {
-          echo "Terraform Apply failed. Sending alert...";
+        terraform apply -auto-approve tfplan | tee -a /tmp/terraform.log || {
+          echo "Terraform Apply failed. Sending alert..."
+          TIMESTAMP=$(date +%s)
+          LOG_FILE="failure-apply-${TIMESTAMP}.txt"
+          echo "Terraform apply failed at $(date)" >> /tmp/terraform.log
+          aws s3 cp /tmp/terraform.log s3://my-react-app-logs/${LOG_FILE}
           aws sns publish \
             --topic-arn arn:aws:sns:ap-south-1:860265990835:my-react-app-terraform-failures \
             --subject "Terraform Apply Failed in CodeBuild" \
-            --message "Terraform apply failed for my-react-app in CodeBuild. Please check the logs.";
-          exit 1;
+            --message "Terraform apply failed for my-react-app. Logs: https://s3.console.aws.amazon.com/s3/object/my-react-app-logs/${LOG_FILE}?region=ap-south-1"
+          exit 1
         }
+
+      - echo Exporting Terraform Outputs...
+      - terraform output > /tmp/terraform-output.txt
+      - TIMESTAMP=$(date +%s)
+      - OUTPUT_FILE="terraform-success-${TIMESTAMP}.txt"
+      - aws s3 cp /tmp/terraform-output.txt s3://my-react-app-logs/${OUTPUT_FILE}
+      - aws sns publish \
+          --topic-arn arn:aws:sns:ap-south-1:860265990835:my-react-app-terraform-failures \
+          --subject "Terraform Success - Resources Created" \
+          --message "Terraform applied successfully. Resource outputs: https://s3.console.aws.amazon.com/s3/object/my-react-app-logs/${OUTPUT_FILE}?region=ap-south-1"
 
 artifacts:
   files:
