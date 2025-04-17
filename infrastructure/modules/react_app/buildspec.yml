@@ -15,47 +15,44 @@ phases:
   build:
     commands:
       - echo Running Terraform Init...
-      - terraform init | tee /tmp/terraform.log
+      - terraform init
 
       - echo Running Terraform Plan...
       - |
-        terraform plan -out=tfplan | tee -a /tmp/terraform.log || {
-          echo "Terraform Plan failed. Sending alert..."
-          TIMESTAMP=$(date +%s)
-          LOG_FILE="failure-plan-${TIMESTAMP}.txt"
-          echo "Terraform plan failed at $(date)" >> /tmp/terraform.log
-          aws s3 cp /tmp/terraform.log s3://my-react-app-logs/${LOG_FILE}
+        echo "Running Terraform Plan..."
+        terraform plan -out=tfplan > plan.log 2>&1 || {
+          echo "Terraform Plan failed. Uploading log to S3 and sending alert..."
+
+          # Upload the log
+          aws s3 cp plan.log s3://my-react-app-pipeline-artifacts-860265990835/logs/plan-$(date +%s).log
+
+          # Generate pre-signed URL
+          PRESIGNED_URL=$(aws s3 presign s3://my-react-app-pipeline-artifacts-860265990835/logs/plan-$(date +%s).log --expires-in 3600)
+
+          # Send email with the pre-signed URL
           aws sns publish \
             --topic-arn arn:aws:sns:ap-south-1:860265990835:my-react-app-terraform-failures \
             --subject "Terraform Plan Failed in CodeBuild" \
-            --message "Terraform plan failed for my-react-app. Logs: https://s3.console.aws.amazon.com/s3/object/my-react-app-logs/${LOG_FILE}?region=ap-south-1"
+            --message "Terraform plan failed for my-react-app.\n\nLog file: $PRESIGNED_URL"
+
           exit 1
         }
 
       - echo Running Terraform Apply...
       - |
-        terraform apply -auto-approve tfplan | tee -a /tmp/terraform.log || {
-          echo "Terraform Apply failed. Sending alert..."
-          TIMESTAMP=$(date +%s)
-          LOG_FILE="failure-apply-${TIMESTAMP}.txt"
-          echo "Terraform apply failed at $(date)" >> /tmp/terraform.log
-          aws s3 cp /tmp/terraform.log s3://my-react-app-logs/${LOG_FILE}
+        terraform apply -auto-approve tfplan > apply.log 2>&1 || {
+          echo "Terraform Apply failed. Uploading log to S3 and sending alert..."
+
+          aws s3 cp apply.log s3://my-react-app-pipeline-artifacts-860265990835/logs/apply-$(date +%s).log
+          PRESIGNED_URL=$(aws s3 presign s3://my-react-app-pipeline-artifacts-860265990835/logs/apply-$(date +%s).log --expires-in 3600)
+
           aws sns publish \
             --topic-arn arn:aws:sns:ap-south-1:860265990835:my-react-app-terraform-failures \
             --subject "Terraform Apply Failed in CodeBuild" \
-            --message "Terraform apply failed for my-react-app. Logs: https://s3.console.aws.amazon.com/s3/object/my-react-app-logs/${LOG_FILE}?region=ap-south-1"
+            --message "Terraform apply failed for my-react-app.\n\nLog file: $PRESIGNED_URL"
+
           exit 1
         }
-
-      - echo Exporting Terraform Outputs...
-      - terraform output > /tmp/terraform-output.txt
-      - TIMESTAMP=$(date +%s)
-      - OUTPUT_FILE="terraform-success-${TIMESTAMP}.txt"
-      - aws s3 cp /tmp/terraform-output.txt s3://my-react-app-logs/${OUTPUT_FILE}
-      - aws sns publish \
-          --topic-arn arn:aws:sns:ap-south-1:860265990835:my-react-app-terraform-failures \
-          --subject "Terraform Success - Resources Created" \
-          --message "Terraform applied successfully. Resource outputs: https://s3.console.aws.amazon.com/s3/object/my-react-app-logs/${OUTPUT_FILE}?region=ap-south-1"
 
 artifacts:
   files:
