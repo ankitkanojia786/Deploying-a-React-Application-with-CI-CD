@@ -1,59 +1,77 @@
 version: 0.2
 
+env:
+  variables:
+    REACT_APP_DIR: "public"  # Explicitly define React app location
+    TF_DIR: "Infrastructure/modules/react_app"  # Terraform directory
+
 phases:
   install:
     runtime-versions:
       nodejs: 16
       python: 3.11
     commands:
-      - echo Installing Terraform...
+      # Install Terraform
+      - echo "Installing Terraform..."
       - curl -o terraform.zip https://releases.hashicorp.com/terraform/1.6.6/terraform_1.6.6_linux_amd64.zip
       - unzip terraform.zip
       - mv terraform /usr/local/bin/
       - terraform version
+      
+      # Install React dependencies
+      - echo "Installing React dependencies..."
+      - cd $REACT_APP_DIR
+      - npm install
+      - cd $CODEBUILD_SRC_DIR
+
+  pre_build:
+    commands:
+      # Build React app
+      - echo "Building React app..."
+      - cd $REACT_APP_DIR
+      - npm run build
+      - cd $CODEBUILD_SRC_DIR
 
   build:
     commands:
-      - echo Running Terraform Init...
-      - terraform init
-
-      - echo Running Terraform Plan...
+      # Terraform operations
+      - echo "Running Terraform in $TF_DIR..."
+      - cd $TF_DIR
+      
       - |
-        echo "Running Terraform Plan..."
-        terraform plan -out=tfplan > plan.log 2>&1 || {
-          echo "Terraform Plan failed. Uploading log to S3 and sending alert..."
-
-          # Upload the log
-          aws s3 cp plan.log s3://my-react-app-pipeline-artifacts-860265990835/logs/plan-$(date +%s).log
-
-          # Generate pre-signed URL
-          PRESIGNED_URL=$(aws s3 presign s3://my-react-app-pipeline-artifacts-860265990835/logs/plan-$(date +%s).log --expires-in 3600)
-
-          # Send email with the pre-signed URL
-          aws sns publish \
-            --topic-arn arn:aws:sns:ap-south-1:860265990835:my-react-app-terraform-failures \
-            --subject "Terraform Plan Failed in CodeBuild" \
-            --message "Terraform plan failed for my-react-app.\n\nLog file: $PRESIGNED_URL"
-
+        echo "Running Terraform Init..."
+        terraform init || {
+          echo "Terraform init failed"
           exit 1
         }
 
-      - echo Running Terraform Apply...
       - |
-        terraform apply -auto-approve tfplan > apply.log 2>&1 || {
-          echo "Terraform Apply failed. Uploading log to S3 and sending alert..."
-
-          aws s3 cp apply.log s3://my-react-app-pipeline-artifacts-860265990835/logs/apply-$(date +%s).log
-          PRESIGNED_URL=$(aws s3 presign s3://my-react-app-pipeline-artifacts-860265990835/logs/apply-$(date +%s).log --expires-in 3600)
-
+        echo "Running Terraform Plan..."
+        terraform plan -out=tfplan > plan.log 2>&1 || {
+          echo "Terraform Plan failed. Uploading logs..."
+          aws s3 cp plan.log s3://my-react-app-pipeline-artifacts-860265990835/logs/plan-$(date +%s).log
+          PRESIGNED_URL=$(aws s3 presign s3://my-react-app-pipeline-artifacts-860265990835/logs/plan-$(date +%s).log --expires-in 3600)
           aws sns publish \
             --topic-arn arn:aws:sns:ap-south-1:860265990835:my-react-app-terraform-failures \
-            --subject "Terraform Apply Failed in CodeBuild" \
-            --message "Terraform apply failed for my-react-app.\n\nLog file: $PRESIGNED_URL"
+            --subject "Terraform Plan Failed" \
+            --message "Terraform plan failed.\nLog: $PRESIGNED_URL\nFull path: $CODEBUILD_SRC_DIR/$TF_DIR"
+          exit 1
+        }
 
+      - |
+        echo "Running Terraform Apply..."
+        terraform apply -auto-approve tfplan > apply.log 2>&1 || {
+          echo "Terraform Apply failed. Uploading logs..."
+          aws s3 cp apply.log s3://my-react-app-pipeline-artifacts-860265990835/logs/apply-$(date +%s).log
+          PRESIGNED_URL=$(aws s3 presign s3://my-react-app-pipeline-artifacts-860265990835/logs/apply-$(date +%s).log --expires-in 3600)
+          aws sns publish \
+            --topic-arn arn:aws:sns:ap-south-1:860265990835:my-react-app-terraform-failures \
+            --subject "Terraform Apply Failed" \
+            --message "Terraform apply failed.\nLog: $PRESIGNED_URL\nFull path: $CODEBUILD_SRC_DIR/$TF_DIR"
           exit 1
         }
 
 artifacts:
   files:
     - '**/*'
+  base-directory: $REACT_APP_DIR/build
